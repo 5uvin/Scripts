@@ -20,19 +20,18 @@ echo "Debug: Script started with arguments: $@"
 ## Default Variables
 settings="/mnt/robot_ws/good_settings.ini"
 test=$3
+rosbag_arg="${4:-}"
+#DIRECTORY="/mnt/robot_ws/$(date +"%Y_%m_%d")"
+DIRECTORY="/mnt/robot_ws/2024_12_04"
 
 if [[ (${1:-} == "multi" && ${2:-} == "stereo") || (${1:-} == "" && ${2:-} == "")]]; then
 	params="/mnt/robot_ws/multi_stereo_config.yaml"	
-	rosbag_arg="${4:-}"
 elif [[ (${1:-} == "single" && ${2:-} == "stereo") ]]; then
 	params="/mnt/robot_ws/single_stereo_config.yaml"
-	rosbag_arg="${4:-}"
 elif [[ ($1 == "multi" && $2 == "rgbd") ]]; then
 	params="/mnt/robot_ws/multi_rgbd_config.yaml"
-	rosbag_arg="${4:-}"
 elif [[ ($1 == "single" && $2 == "rgbd") ]]; then
 	params="/mnt/robot_ws/single_rgbd_config.yaml"
-	rosbag_arg="${4:-}"
 elif [[ ($1 == "atheon") ]]; then
 	params="/mnt/robot_ws/single-stereo-atheon.yaml"
 	settings="/mnt/robot_ws/kdvisual_multiple_realsense.ini"
@@ -40,22 +39,14 @@ elif [[ ($1 == "atheon") ]]; then
 	rosbag_arg="${3:-}"
 fi    
 
+echo -e "${GREEN}<---------- Params: $params ---------->${RESET}"
+echo -e "${GREEN}<---------- Settings: $settings ---------->${RESET}"
+
 if [[ -n "$rosbag_arg" ]]; then
     echo -e "${GREEN}Using rosbag file: $rosbag_arg${RESET}"
 else
     echo -e "${YELLOW}No rosbag file provided, skipping rosbag argument...${RESET}"
 fi
-
-echo "Single/Multi: $1"
-echo "Stereo/RGBD: $2"
-echo -e "${GREEN}<---------- Params: $params ---------->${RESET}"
-echo -e "${GREEN}<---------- Settings: $settings ---------->${RESET}"
-
-roslaunch kdvisual_ros kdvisual.launch license_file:=/mnt/robot_ws/KdVisualGoodLicense.kdlicense2 params_file:=$params settings_file:=$settings rviz:=true ${rosbag_arg:+"rosbag:=$rosbag_arg"} &
-#roslaunch lidar_odometry_atheon.launch params_file:=$params settings_file:=$settings ${rosbag_arg:+"rosbag:=$rosbag_arg"} &
-
-#DIRECTORY="/mnt/robot_ws/$(date +"%Y_%m_%d")"
-DIRECTORY="/mnt/robot_ws/2024_12_04"
 
 prep_directories() {
 	if [[ -d "$DIRECTORY" ]]; then
@@ -76,22 +67,30 @@ call_rosservice() {
 		
 		cd $DIRECTORY/$test/
 		rosparam dump param_dump.yaml
-		rosrun pcl_ros pointcloud_to_pcd input:=/kdvisual_ros/map_points
-			
+		rosrun pcl_ros pointcloud_to_pcd input:=/kdvisual_ros/map_points	
 }
 
 cleanup() {
+
+	## Kill KdVisual processes
 	echo -e "${RED}Terminating KdVisual${RESET}"
 	ps aux | grep kdvisual | grep -v grep | awk '{ print "kill -9", $2 }' | sh
 	ps aux | grep rf2o | grep -v grep | awk '{ print "kill -9", $2 }' | sh
+	
+	## Send restart signal to Gemini
 	ssh handsfree@192.168.10.1 "echo 'handsfree' | sudo -S systemctl restart roscore.service" &
 	ssh handsfree@192.168.10.1 "echo 'handsfree' | sudo -S systemctl restart rundriverlaser.service" &
 	ssh handsfree@192.168.10.1 "echo 'handsfree' | sudo -S systemctl restart runlaser.service" &
 	cd /mnt/robot_ws
 	sleep 2
 	printf "${GREEN}\n<----- Restarting ROSCORE & Gemini nodes.. Please wait.. ----->\n${RESET}"
+	
+	## Unset default variables
 	unset params
 	unset settings
+	unset test
+	unset DIRECTORY
+	
 	sleep 6
 }
 
@@ -123,8 +122,7 @@ rosbag_record() {
 		/camera_back/aligned_depth_to_color/camera_info \
 		/vrpn_client_node/GeminiMini2/pose & NODE_PID_BAG=$!
 		echo "$NODE_PID_BAG"
-		cd /mnt/robot_ws
-		
+		cd /mnt/robot_ws		
 }
 
 rosbag_record_kill() {
@@ -139,33 +137,25 @@ rosbag_record_kill() {
     fi
 }
 
-#trap cleanup SIGINT
+main() {
+	roslaunch kdvisual_ros kdvisual.launch license_file:=/mnt/robot_ws/KdVisualGoodLicense.kdlicense2 params_file:=$params settings_file:=$settings rviz:=true ${rosbag_arg:+"rosbag:=$rosbag_arg"} &
+	#roslaunch lidar_odometry_atheon.launch params_file:=$params settings_file:=$settings ${rosbag_arg:+"rosbag:=$rosbag_arg"} &
 
+	echo -e "${YELLOW}ROS node launched with PID $NODE_PID. Press 'q' to exit. Press 't' to call all rosservices. Press 'r' to record rosbag and 'e' to kill rosbag${RESET}"
 
-echo -e "${YELLOW}ROS node launched with PID $NODE_PID. Press 'q' to exit. Press 't' to call all rosservices. Press 'r' to record rosbag and 'e' to kill rosbag${RESET}"
+	while true; do
 
-while true; do
+	    read -n 1 -s key 
+		case $key in
+	        t|T) call_rosservice ;;
+	        r|R) rosbag_record ;;
+	        e|E) rosbag_record_kill ;;
+	        q|Q) cleanup; break ;;
+	    esac
 
-    read -n 1 -s key 
-    # if [[ $key == "t" || $key == "T" ]]; then
-    #     call_rosservice
-    # elif [[ $key == "q" || $key == "Q" ]]; then  # Detect Ctrl+C
-    #     cleanup
-    #     break
-    # fi
-    # if [[ $key == "r" || $key == "R" ]]; then
-    #     rosbag_record
-    # elif [[ $key == "e" || $key == "E" ]]; then
-	# rosbag_record_kill
-    # fi
-	case $key in
-        t|T) call_rosservice ;;
-        r|R) rosbag_record ;;
-        e|E) rosbag_record_kill ;;
-        q|Q) cleanup; break ;;
-    esac
+	done
+}
 
-done
-
+main
 
 printf "\nDONE\n"
