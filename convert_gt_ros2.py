@@ -13,6 +13,8 @@ def modify_data(input_file):
 
     # Drop the second and third columns
     df.drop(columns=[1, 2], inplace=True)
+    df.drop(columns=df.columns[8:], inplace=True)
+    
 
     # Reset the column indices to reflect changes
     df.columns = range(df.shape[1])
